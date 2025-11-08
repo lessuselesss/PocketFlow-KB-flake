@@ -76,6 +76,24 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
 
 ## 🚀 Getting Started
 
+### Option 1: Using Nix Flake (Recommended)
+
+If you have Nix with flakes enabled:
+
+```bash
+# Run directly without cloning
+nix run github:lessuselesss/PocketFlow-KB-flake -- --repo https://github.com/username/repo
+
+# Or clone and use locally
+git clone https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge
+cd PocketFlow-Tutorial-Codebase-Knowledge
+nix run . -- --help
+```
+
+See [FLAKE_USAGE.md](./FLAKE_USAGE.md) for detailed Nix flake documentation.
+
+### Option 2: Traditional Installation
+
 1. Clone this repository
    ```bash
    git clone https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge
