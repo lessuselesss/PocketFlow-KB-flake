@@ -1,0 +1,216 @@
+name: Sync with Upstream
+
+on:
+  # Run automatically every day at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+
+  # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+    inputs:
+      sync_strategy:
+        description: 'Sync strategy (merge or rebase)'
+        required: false
+        default: 'merge'
+        type: choice
+        options:
+          - merge
+          - rebase
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge.git || true
+          git remote set-url upstream https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge.git
+
+      - name: Fetch upstream changes
+        run: |
+          git fetch upstream
+          git fetch origin
+
+      - name: Get current branch
+        id: get_branch
+        run: |
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "branch=${CURRENT_BRANCH}" >> $GITHUB_OUTPUT
+          echo "Current branch: ${CURRENT_BRANCH}"
+
+      - name: Check for upstream changes
+        id: check_changes
+        run: |
+          # Compare upstream/main with origin/main (or master)
+          UPSTREAM_BRANCH="main"
+          LOCAL_BRANCH="${{ steps.get_branch.outputs.branch }}"
+
+          # Try main first, fallback to master
+          if ! git rev-parse --verify upstream/main >/dev/null 2>&1; then
+            UPSTREAM_BRANCH="master"
+          fi
+
+          if ! git rev-parse --verify origin/${LOCAL_BRANCH} >/dev/null 2>&1; then
+            LOCAL_BRANCH="master"
+          fi
+
+          echo "upstream_branch=${UPSTREAM_BRANCH}" >> $GITHUB_OUTPUT
+          echo "local_branch=${LOCAL_BRANCH}" >> $GITHUB_OUTPUT
+
+          # Check if there are new commits
+          BEHIND=$(git rev-list --count HEAD..upstream/${UPSTREAM_BRANCH})
+          echo "behind=${BEHIND}" >> $GITHUB_OUTPUT
+          echo "Repository is ${BEHIND} commits behind upstream/${UPSTREAM_BRANCH}"
+
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to sync from upstream"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Found ${BEHIND} new commits to sync"
+          fi
+
+      - name: Sync with upstream (merge strategy)
+        if: steps.check_changes.outputs.has_changes == 'true' && (github.event.inputs.sync_strategy == 'merge' || github.event.inputs.sync_strategy == '')
+        run: |
+          UPSTREAM_BRANCH=${{ steps.check_changes.outputs.upstream_branch }}
+          LOCAL_BRANCH=${{ steps.check_changes.outputs.local_branch }}
+
+          echo "Merging upstream/${UPSTREAM_BRANCH} into ${LOCAL_BRANCH}"
+
+          # Attempt to merge
+          if git merge upstream/${UPSTREAM_BRANCH} --no-edit; then
+            echo "Merge successful"
+            echo "merge_status=success" >> $GITHUB_ENV
+          else
+            echo "Merge conflict detected"
+            echo "merge_status=conflict" >> $GITHUB_ENV
+            git merge --abort
+          fi
+
+      - name: Sync with upstream (rebase strategy)
+        if: steps.check_changes.outputs.has_changes == 'true' && github.event.inputs.sync_strategy == 'rebase'
+        run: |
+          UPSTREAM_BRANCH=${{ steps.check_changes.outputs.upstream_branch }}
+          LOCAL_BRANCH=${{ steps.check_changes.outputs.local_branch }}
+
+          echo "Rebasing ${LOCAL_BRANCH} onto upstream/${UPSTREAM_BRANCH}"
+
+          # Attempt to rebase
+          if git rebase upstream/${UPSTREAM_BRANCH}; then
+            echo "Rebase successful"
+            echo "merge_status=success" >> $GITHUB_ENV
+          else
+            echo "Rebase conflict detected"
+            echo "merge_status=conflict" >> $GITHUB_ENV
+            git rebase --abort
+          fi
+
+      - name: Push changes
+        if: steps.check_changes.outputs.has_changes == 'true' && env.merge_status == 'success'
+        run: |
+          LOCAL_BRANCH=${{ steps.check_changes.outputs.local_branch }}
+
+          # Force push if using rebase, normal push if using merge
+          if [ "${{ github.event.inputs.sync_strategy }}" == "rebase" ]; then
+            git push origin ${LOCAL_BRANCH} --force-with-lease
+          else
+            git push origin ${LOCAL_BRANCH}
+          fi
+
+      - name: Create issue on conflict
+        if: steps.check_changes.outputs.has_changes == 'true' && env.merge_status == 'conflict'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const upstreamBranch = '${{ steps.check_changes.outputs.upstream_branch }}';
+            const localBranch = '${{ steps.check_changes.outputs.local_branch }}';
+            const strategy = '${{ github.event.inputs.sync_strategy }}' || 'merge';
+
+            const title = `⚠️ Upstream sync conflict detected`;
+            const body = `## Sync Conflict
+
+            The automated sync with upstream encountered conflicts and could not complete automatically.
+
+            **Details:**
+            - Upstream branch: \`upstream/${upstreamBranch}\`
+            - Local branch: \`${localBranch}\`
+            - Strategy: \`${strategy}\`
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            **Manual resolution required:**
+
+            \`\`\`bash
+            # Clone the repository
+            git clone ${{ github.server_url }}/${{ github.repository }}.git
+            cd $(basename ${{ github.repository }})
+
+            # Add upstream remote
+            git remote add upstream https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge.git
+
+            # Fetch latest changes
+            git fetch upstream
+            git fetch origin
+
+            # Attempt to ${strategy}
+            git ${strategy} upstream/${upstreamBranch}
+
+            # Resolve conflicts manually, then:
+            git add .
+            git commit -m "Resolve merge conflicts with upstream"
+            git push origin ${localBranch}
+            \`\`\`
+
+            After resolving, close this issue.`;
+
+            // Check if an issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: ['upstream-sync', 'conflict']
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['upstream-sync', 'conflict', 'automated']
+              });
+            }
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check_changes.outputs.has_changes }}" == "false" ]; then
+            echo "✅ Repository is already up to date with upstream" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ env.merge_status }}" == "success" ]; then
+            echo "✅ Successfully synced ${{ steps.check_changes.outputs.behind }} commits from upstream" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Strategy:** ${{ github.event.inputs.sync_strategy || 'merge' }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ env.merge_status }}" == "conflict" ]; then
+            echo "⚠️ Sync failed due to merge conflicts" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "An issue has been created for manual resolution." >> $GITHUB_STEP_SUMMARY
+          fi

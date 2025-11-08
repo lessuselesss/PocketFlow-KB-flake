@@ -14,6 +14,8 @@
 
 This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/PocketFlow), a 100-line LLM framework. It crawls GitHub repositories and builds a knowledge base from the code. It analyzes entire codebases to identify core abstractions and how they interact, and transforms complex code into beginner-friendly tutorials with clear visualizations.
 
+> **Note:** This fork includes a Nix flake for easy installation and automatic upstream synchronization. See [FLAKE_USAGE.md](./FLAKE_USAGE.md) and [.github/UPSTREAM_SYNC.md](./.github/UPSTREAM_SYNC.md) for details.
+
 - Check out the [YouTube Development Tutorial](https://youtu.be/AFY67zOpbSo) for more!
 
 - Check out the [Substack Post Tutorial](https://zacharyhuang.substack.com/p/ai-codebase-knowledge-builder-full) for more!
